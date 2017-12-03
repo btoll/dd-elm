@@ -10,8 +10,28 @@ import Styles
 
 -- MODEL
 
+type alias GamePosition =
+    Int
+
+
+-- Currently, not used...
+type alias RowPosition =
+    Int
+
+
+type alias TeamName =
+    String
+
+
+type alias DDPacket =
+    { team : Maybe TeamName
+    , rowPosition : RowPosition
+    , gamePosition : GamePosition
+    }
+
+
 type alias Game =
-    { team : Maybe String
+    { team : Maybe TeamName
     , favorite : Maybe Bool
     , winner : Maybe Bool
     , finalScore : Maybe Int
@@ -25,20 +45,15 @@ type alias Match =
     }
 
 
-type alias TeamName =
-    String
-
-
 type alias Model =
     { games : List Game
     , teams : List TeamName
     , matches : List Match
-    , movingTeam : Maybe TeamName
+    , dragInfo : Maybe DDPacket
     }
 
 
---TODO
---type Pool = Active | Available | Eliminated
+type Pool = Active DDPacket | Available | Eliminate
 
 
 model : Model
@@ -46,13 +61,7 @@ model =
     { games = []
     , teams = []
     , matches = []
-    , movingTeam = Nothing
-    }
-
-
-type alias DDPacket =
-    { rowPosition : Int
-    , gamePosition : Int
+    , dragInfo = Nothing
     }
 
 
@@ -61,15 +70,15 @@ type alias DDPacket =
 type Msg
     = AddNewMatch
     | CancelMove
-    | DropOn DDPacket
-    | Move TeamName
+    | DropOn Pool
+    | Move ( Maybe DDPacket )
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
         AddNewMatch ->
-            ( { model | matches = ( (++) [ {
+            { model | matches = ( (++) [ {
                 games = ( Just {
                     team = Nothing
                     , favorite = Nothing
@@ -84,40 +93,103 @@ update msg model =
                 } ),
                 gameDate = Nothing,
                 submitted = Nothing
-            } ] model.matches ) }, Cmd.none )
+            } ] model.matches ) } ! []
 
         CancelMove ->
-            ( { model | movingTeam = Nothing }, Cmd.none )
+            { model | dragInfo = Nothing } ! []
 
-        --TODO: Cleanup.
-        DropOn ddPacket ->
-            let
-                newMatches = List.indexedMap ( \i match ->
-                    case ddPacket.rowPosition == i of
-                        True ->
+        DropOn msg ->
+            case msg of
+                Active ddPacket ->
+                    case model.dragInfo of
+                        Nothing ->
+                            model ! []
+
+                        Just dragInfo ->
                             let
-                                game = if ddPacket.gamePosition == 0 then Tuple.first match.games else Tuple.second match.games
-                                oldGame = Maybe.withDefault ( Game Nothing Nothing Nothing Nothing ) game
-                                newGame = { oldGame | team = model.movingTeam }
+                                oldDragInfo = ( Maybe.withDefault ( DDPacket ( Just "" ) -1 -1 ) model.dragInfo )
+                                newDragInfo = { oldDragInfo | rowPosition = ddPacket.rowPosition, gamePosition = ddPacket.gamePosition }
 
-                                m = if ddPacket.gamePosition == 0
-                                    then { match | games = ( Just newGame, Tuple.second match.games ) }
-                                    else { match | games = ( Tuple.first match.games, Just newGame ) }
+                                newMatches = List.indexedMap ( \i match ->
+                                    case ddPacket.rowPosition == i of
+                                        True ->
+                                            let
+                                                game = if newDragInfo.gamePosition == 0 then Tuple.first match.games else Tuple.second match.games
+                                                oldGame = Maybe.withDefault ( Game Nothing Nothing Nothing Nothing ) game
+                                                newGame = { oldGame | team = dragInfo.team }
+
+                                                m = if newDragInfo.gamePosition == 0
+                                                    then { match | games = ( Just newGame, Tuple.second match.games ) }
+                                                    else { match | games = ( Tuple.first match.games, Just newGame ) }
+                                            in
+                                                m
+                                        False ->
+                                            match
+                                ) model.matches
                             in
-                                m
-                        False ->
-                            match
-                ) model.matches
+                                { model |
+                                    matches = newMatches
+                                    , teams = List.filter ( \t -> t /= ( Maybe.withDefault "" dragInfo.team ) ) model.teams
+                                    , dragInfo = Just newDragInfo
+                                } ! []
 
-                teams = List.filter ( \t -> t /= ( Maybe.withDefault "" model.movingTeam ) ) model.teams
-            in
-                ( { model |
-                    matches = newMatches
-                    , teams = teams
-                }, Cmd.none )
+                Available ->
+                    case model.dragInfo of
+                        Nothing ->
+                            model ! []
 
-        Move team ->
-            ( { model | movingTeam = Just team }, Cmd.none )
+                        Just dragInfo ->
+                            case dragInfo.rowPosition == -1 of
+                                -- Don't allow a drop on the original/source drop zone!
+                                True ->
+                                    -- Resetting this value will set the opacity back to 1 in `addTeam`.
+                                    { model | dragInfo = Nothing } ! []
+
+                                False ->
+                                    case dragInfo.team of
+                                        Nothing ->
+                                            { model | dragInfo = Nothing } ! []
+
+                                        Just team ->
+                                            let
+                                                newMatches = List.indexedMap ( \i match ->
+                                                    case dragInfo.rowPosition == i of
+                                                        True ->
+                                                            let
+                                                                m = if dragInfo.gamePosition == 0
+                                                                    then { match | games = ( Nothing, Tuple.second match.games ) }
+                                                                    else { match | games = ( Tuple.first match.games, Nothing ) }
+                                                            in
+                                                                m
+                                                        False ->
+                                                            match
+                                                ) model.matches
+                                            in
+                                                { model |
+                                                    matches = newMatches
+                                                    , teams = (::) team model.teams
+                                                    , dragInfo = Nothing
+                                                } ! []
+
+                Eliminate ->
+                    model ! []
+
+
+        Move msg ->
+            case msg of
+                Nothing ->
+                    model ! []
+
+                Just ddPacket ->
+                    let
+                        oldDragInfo = ( Maybe.withDefault ( DDPacket ( Just "" ) -1 -1 ) model.dragInfo )
+                        newDragInfo = { oldDragInfo |
+                            team = ddPacket.team
+                            , rowPosition = ddPacket.rowPosition
+                            , gamePosition = ddPacket.gamePosition
+                        }
+                    in
+                        { model | dragInfo = Just newDragInfo } ! []
 
 
 -- VIEW
@@ -125,52 +197,56 @@ update msg model =
 --TODO: Sort out the tbody generation.
 view : Model -> Html Msg
 view model =
-    div []
-    [ div [ style Styles.dropZone ]
-        [ table []
-            [ thead []
-                [ tr []
-                    [ th [] [ text "Game Date/Time" ]
-                    , th [] [ text "Favorite" ]
-                    , th [] [ text "Winner" ]
-                    , th [] [ text "Final Score" ]
-                    ]
-            ]
-            , table []
-                ( List.indexedMap ( addMatch model ) <| model.matches )
-            ]
+    let
+        dragEvents = [ attribute "ondragover" "return false"
+          , onDrop <| DropOn Available
         ]
---        [ table []
---            [ thead []
---                [ tr []
---                    [ th [] [ text "Game Date/Time" ]
---                    , th [] [ text "Favorite" ]
---                    , th [] [ text "Winner" ]
---                    , th [] [ text "Final Score" ]
---                    ]
---                    ]
---            , model.matches
---                |> List.indexedMap ( addMatch model )
---                |> List.head
---                |> Maybe.withDefault ( tbody [] [] )
---            ]
---        ]
-    , button [ style Styles.addGameBtn, onClick AddNewMatch ] [ text "ADD GAME" ]
-    , div [ style Styles.dropZone ]
-        [ table []
-            [ thead []
-                [ tr []
-                    [ th [ colspan 4 ] [ text "Available Teams" ]
-                    ]
+    in
+        div []
+        [ div [ style Styles.dropZone ]
+            [ table []
+                [ thead []
+                    [ tr []
+                        [ th [] [ text "Game Date/Time" ]
+                        , th [] [ text "Favorite" ]
+                        , th [] [ text "Winner" ]
+                        , th [] [ text "Final Score" ]
+                        ]
                 ]
-            , tbody []
-                ( List.map ( addTeam model ) <| model.teams )
+                , table []
+                    ( List.indexedMap ( addMatch model ) <| model.matches )
+                ]
+            ]
+    --        [ table []
+    --            [ thead []
+    --                [ tr []
+    --                    [ th [] [ text "Game Date/Time" ]
+    --                    , th [] [ text "Favorite" ]
+    --                    , th [] [ text "Winner" ]
+    --                    , th [] [ text "Final Score" ]
+    --                    ]
+    --                    ]
+    --            , model.matches
+    --                |> List.indexedMap ( addMatch model )
+    --                |> List.head
+    --                |> Maybe.withDefault ( tbody [] [] )
+    --            ]
+    --        ]
+        , button [ style Styles.addGameBtn, onClick AddNewMatch ] [ text "ADD GAME" ]
+        , div ( (::) ( style Styles.dropZone ) dragEvents )
+            [ table []
+                [ thead []
+                    [ tr []
+                        [ th [ colspan 4 ] [ text "Available Teams" ]
+                        ]
+                    ]
+                , tbody []
+                    ( List.map ( addTeam model ) <| model.teams )
+                ]
             ]
         ]
-    ]
 
 
---TODO: Clean this up.
 addMatch : Model -> Int -> Match -> Html Msg
 addMatch model rowId match =
     let
@@ -194,66 +270,78 @@ addMatch model rowId match =
         commonStyles = [
             ( "display", "inline-block" ), ( "width", "100px" )
         ]
+
+        events : Maybe TeamName -> GamePosition -> List ( Attribute Msg )
+        events team gamePosition =
+            [ attribute "draggable" "true"
+            , onDragStart <| Move ( Just <| DDPacket team rowId gamePosition )
+            , attribute "ondragstart"
+                "event.dataTransfer.setData(\"text/plain\", \"derp\")"
+
+            , attribute "ondragover" "return false"
+            , onDrop <| DropOn ( DDPacket Nothing rowId gamePosition |> Active )
+            ]
     in
         tbody []
-            [ tr [ attribute "ondragover" "return false", onDrop <| DropOn { rowPosition = rowId, gamePosition = 0 } ]
-                [ td [ style commonStyles ] [ text ( Maybe.withDefault "Drop team here" firstGame.team ) ]
-                , td [] [ input [ type_ "checkbox" ] [] ]
-                , td [] [ input [ type_ "checkbox" ] [] ]
-                , td [] [ input [ type_ "text" ] [] ]
-                ]
-            , tr [ attribute "ondragover" "return false", onDrop <| DropOn { rowPosition = rowId, gamePosition = 1 } ]
-                [ td [ style commonStyles ] [ text ( Maybe.withDefault "Drop team here" secondGame.team ) ]
-                , td [] [ input [ type_ "checkbox" ] [] ]
-                , td [] [ input [ type_ "checkbox" ] [] ]
-                , td [] [ input [ type_ "text" ] [] ]
-                ]
+            [ events firstGame.team 0 |> createMatchRow firstGame.team [] commonStyles
+            , events secondGame.team 1 |> createMatchRow secondGame.team [] commonStyles
             ]
 
 
+--TODO Cleanup
 addTeam : Model -> TeamName -> Html Msg
 addTeam model team =
     let
-        ( draggableRowStyles, draggableCellStyles, draggableEvents ) =
-            case model.movingTeam of
+        commonDragEvents =
+            [ attribute "draggable" "true"
+              , onDragStart <| Move ( Just <| DDPacket ( Just team ) -1 -1 )
+              , attribute "ondragstart" "event.dataTransfer.setData(\"text/plain\", \"derp\")"
+            ]
+
+        ( allStyles, dragEvents ) =
+            case model.dragInfo of
                 Nothing ->
                     (
-                        [ ( "background", "#fff" ) ]
-                        , []
-                        , [ attribute "draggable" "true"
-                          , onDragStart <| Move team
-                          , attribute "ondragstart"
-                              "event.dataTransfer.setData(\"text/plain\", \"derp\")"
-                        ]
+                        [ ( "background", "#fff" ), ( "border", "1px solid #000" ), ( "opacity", "1" ) ]
+                        , commonDragEvents
                     )
-                Just movingTeam ->
-                    if movingTeam == team then
+                Just dragInfo ->
+                    if ( Maybe.withDefault "" dragInfo.team ) == team then
                         (
-                            []
-                            , [ ( "opacity", "0.2" ) ]
+                            [ ( "opacity", "0.2" ) ]
                             , [ attribute "draggable" "true"
                               , onDragEnd <| CancelMove
                             ]
                         )
                     else
-                        ( [], [], [] )
+                        (
+                            []
+                            , commonDragEvents
+                        )
     in
-        tr ( [ style draggableRowStyles ] ++ draggableEvents )
-            [ td [ style draggableCellStyles ] [ text team ]
-            , td [ style Styles.hidden ] [ input [ type_ "checkbox" ] [] ]
-            , td [ style Styles.hidden ] [ input [ type_ "checkbox" ] [] ]
-            , td [ style Styles.hidden ] [ input [ type_ "text" ] [] ]
-            ]
+--        createRow ( Just team ) rowStyles cellStyles events
+        [ text ( Maybe.withDefault "Drop team here" ( Just team ) ) ]
+            |> div ( [ style allStyles ] ++ dragEvents )
+
+
+createMatchRow : Maybe TeamName -> List ( String, String ) -> List ( String, String ) -> List ( Attribute msg ) -> Html msg
+createMatchRow team rowStyles cellStyles events =
+    tr ( [ style rowStyles ] ++ events )
+        [ td [ style cellStyles ] [ text ( Maybe.withDefault "Drop team here" team ) ]
+        , td [] [ input [ type_ "checkbox" ] [] ]
+        , td [] [ input [ type_ "checkbox" ] [] ]
+        , td [] [ input [ type_ "text" ] [] ]
+        ]
 
 
 init : ( Model, Cmd Msg )
 init =
-    ( { model | teams =
+    { model | teams =
         [ "John"
         , "Paul"
         , "George"
         , "Ringo"
-    ] }, Cmd.none )
+    ] } ! []
 
 
 main : Program Never Model Msg
