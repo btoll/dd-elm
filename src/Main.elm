@@ -194,44 +194,29 @@ update msg model =
 
 -- VIEW
 
---TODO: Sort out the tbody generation.
 view : Model -> Html Msg
 view model =
     let
         dragEvents = [ attribute "ondragover" "return false"
-          , onDrop <| DropOn Available
+        , onDrop <| DropOn Available
         ]
     in
         div []
         [ div [ style Styles.dropZone ]
             [ table []
-                [ thead []
-                    [ tr []
-                        [ th [] [ text "Game Date/Time" ]
-                        , th [] [ text "Favorite" ]
-                        , th [] [ text "Winner" ]
-                        , th [] [ text "Final Score" ]
+                ( (++)
+                    [ thead []
+                        [ tr []
+                            [ th [] [ text "Game Date/Time" ]
+                            , th [] [ text "Favorite" ]
+                            , th [] [ text "Winner" ]
+                            , th [] [ text "Final Score" ]
+                            ]
                         ]
-                ]
-                , table []
-                    ( List.indexedMap ( addMatch model ) <| model.matches )
-                ]
+                    ]
+                    ( model.matches |> List.indexedMap ( addMatch model ) )
+                )
             ]
-    --        [ table []
-    --            [ thead []
-    --                [ tr []
-    --                    [ th [] [ text "Game Date/Time" ]
-    --                    , th [] [ text "Favorite" ]
-    --                    , th [] [ text "Winner" ]
-    --                    , th [] [ text "Final Score" ]
-    --                    ]
-    --                    ]
-    --            , model.matches
-    --                |> List.indexedMap ( addMatch model )
-    --                |> List.head
-    --                |> Maybe.withDefault ( tbody [] [] )
-    --            ]
-    --        ]
         , button [ style Styles.addGameBtn, onClick AddNewMatch ] [ text "ADD GAME" ]
         , div ( (::) ( style Styles.dropZone ) dragEvents )
             [ table []
